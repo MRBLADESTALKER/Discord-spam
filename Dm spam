@@ -1,0 +1,72 @@
+import asyncio
+import discord
+import os
+
+# Load token
+def load_token():
+    if not os.path.exists("token.txt"):
+        print("[ERROR] token.txt not found!")
+        exit()
+    with open("token.txt", "r") as file:
+        token = file.read().strip()
+        if not token:
+            print("[ERROR] token.txt is empty!")
+            exit()
+        return token
+
+# Load user IDs
+def load_targets():
+    if not os.path.exists("targets.txt"):
+        print("[ERROR] targets.txt not found!")
+        exit()
+    with open("targets.txt", "r") as file:
+        return [int(line.strip()) for line in file if line.strip().isdigit()]
+
+token = load_token()
+user_ids = load_targets()
+message = input("[+] Enter message to send: ").strip()
+
+intents = discord.Intents.default()
+client = discord.Client(intents=intents)
+
+# Semaphore for concurrent tasks
+semaphore = asyncio.Semaphore(100)
+
+# Logging setup
+def log_success(user):
+    with open("sent.log", "a") as f:
+        f.write(f"[SENT] {user.name} ({user.id})\n")
+
+def log_error(user_id, error):
+    with open("error.log", "a") as f:
+        f.write(f"[ERROR] {user_id} => {str(error)}\n")
+
+# DM sender
+async def send_dm(user_id):
+    async with semaphore:
+        try:
+            user = await client.fetch_user(user_id)
+            await user.send(message)
+            print(f"[+] Sent to {user.name}")
+            log_success(user)
+        except discord.HTTPException as e:
+            if e.status == 429:
+                print(f"[!] Rate limited for {user_id}, retrying in 5s...")
+                await asyncio.sleep(5)
+                await send_dm(user_id)
+            else:
+                print(f"[ERROR] {user_id}: {e}")
+                log_error(user_id, e)
+        except Exception as e:
+            print(f"[ERROR] {user_id}: {e}")
+            log_error(user_id, e)
+
+@client.event
+async def on_ready():
+    print(f"[+] Logged in as {client.user} (ID: {client.user.id})")
+    tasks = [send_dm(uid) for uid in user_ids]
+    await asyncio.gather(*tasks)
+    print("[+] Done. All messages attempted.")
+    await client.close()
+
+client.run(token, bot=False)
